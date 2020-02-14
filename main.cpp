@@ -1,87 +1,108 @@
 #include <cmath>
+#include <complex>
 #include <cstdio>
+#include <fstream>
 #include <mpi.h>
-#include <time.h>
 #include <vector>
 
 using namespace std;
 #define MCW MPI_COMM_WORLD
 
-pair<bool, int> compareLow(int myIdx, int j, int myVal) {
-  int myPartner = myIdx ^ (1 << j);
-  MPI_Send(&myVal, 1, MPI_INT, myPartner, 0, MCW);
-  int compVal;
-  MPI_Recv(&compVal, 1, MPI_INT, myPartner, 0, MCW, MPI_STATUS_IGNORE);
-  return make_pair(compVal < myVal, compVal);
-}
+int value(int x, int y, int width, int height) {
+  complex<float> point(static_cast<float>(x) / width - 1.5,
+                       static_cast<float>(y) / height - 0.5);
 
-pair<bool, int> compareHigh(int myIdx, int j, int myVal) {
-  auto result = compareLow(myIdx, j, myVal);
-  return make_pair(!result.first, result.second);
+  complex<float> z(0, 0);
+  unsigned int numIters = 0;
+  for (; abs(z) < 2 && numIters <= 34; ++numIters) {
+    z = z * z + point;
+  }
+
+  if (numIters < 34) {
+    return 255 * numIters / 33;
+  }
+
+  return 0;
 }
 
 int main(int argc, char **argv) {
+  int width = 0;
+  int height = 0;
+  if (argc != 3) {
+    throw std::runtime_error("command args are missing: width and height are "
+                             "required as such: ./a.out <width> <height>");
+  } else {
+    width = atoi(argv[1]);
+    height = atoi(argv[2]);
+  }
+
   int rank, size;
   int data;
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MCW, &rank);
   MPI_Comm_size(MCW, &size);
-  auto dimensions = log2(size);
-  int myVal;
-  std::vector<int> totalArray = {};
 
-  if (rank == 0) {
-    // create random array sized < 100
-    srand(time(0));
-    // Populate array with random int < 100
-    for (int i = 0; i < size; i++) {
-      totalArray.push_back(rand() % 100);
-    }
-
-    myVal = totalArray[0];
-    for (int i = 1; i < size; i++) {
-      MPI_Send(&totalArray[i], 1, MPI_INT, i, 0, MCW);
-    }
-  } else {
-    MPI_Recv(&myVal, 1, MPI_INT, 0, 0, MCW, MPI_STATUS_IGNORE);
+  int numRows = height / size;
+  if (rank < static_cast<int>(height) % size) {
+    ++numRows;
   }
 
-  {
-    for (int i = 0; i < dimensions; i++) {
-      for (int j = i; j >= 0; j--) {
-        if (((rank >> (i + 1)) % 2 == 0 && (rank >> j) % 2 == 0) ||
-            ((rank >> (i + 1)) % 2 != 0 && (rank >> j) % 2 != 0)) {
-          auto result = compareLow(rank, j, myVal);
-          if (result.first) {
-            myVal = result.second;
-          }
-        } else {
-          auto result = compareHigh(rank, j, myVal);
-          if (result.first) {
-            myVal = result.second;
-          }
+  std::vector<int> subRows(numRows * width);
+
+  for (int row = 0; row < numRows; ++row) {
+    for (int col = 0; col < width; ++col) {
+      int val = value(col, row * size + rank, width, height);
+      subRows[row * width + col] = val;
+    }
+  }
+
+  if (rank == 0) {
+    ofstream myBrot("./myBrot.ppm");
+
+    // Image header
+    myBrot << "P3\n" << width << " " << height << " 255\n";
+
+    if (myBrot.good()) {
+      // Recieve data
+      vector<vector<int>> finalRows(size, vector<int>{});
+      finalRows[0] = subRows;
+
+      for (int i = 1; i < size; ++i) {
+        int tempRows = height / size;
+        if (i < static_cast<int>(height) % size) {
+          ++tempRows;
+        }
+
+        std::vector<int> temp(tempRows * width);
+        MPI_Recv(&temp[0], tempRows * width, MPI_INT, i, 0, MCW,
+                 MPI_STATUS_IGNORE);
+        finalRows[i] = temp;
+      }
+
+      for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+          auto val = finalRows[row % size][row / size * width + col];
+          switch ((row / 2) % 3) {
+          case 0:
+            myBrot << val << ' ' << 0 << ' ' << 0 << "\n";
+            break;
+          case 1:
+            myBrot << 0 << ' ' << val << ' ' << 0 << "\n";
+            break;
+          case 2:
+            myBrot << 0 << ' ' << 0 << ' ' << val << "\n";
+            break;
+          };
         }
       }
-    }
-  }
 
-  if (rank == 0) {
-    totalArray[0] = myVal;
-    for (int i = 1; i < size; i++) {
-      int temp;
-      MPI_Recv(&temp, 1, MPI_INT, i, 0, MCW, MPI_STATUS_IGNORE);
-      totalArray[i] = temp;
+      myBrot.close();
+    } else {
+      throw std::runtime_error("was not able to open file");
     }
   } else {
-    MPI_Send(&myVal, 1, MPI_INT, 0, 0, MCW);
-  }
-
-  if (rank == 0) {
-    printf("totalArray:");
-    for (int i = 0; i < size; i++) {
-      printf("%i,", totalArray[i]);
-    }
-    printf("\n");
+    // Send data to thread 0
+    MPI_Send(&subRows[0], numRows * width, MPI_INT, 0, 0, MCW);
   }
 
   MPI_Finalize();

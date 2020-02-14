@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -8,11 +9,18 @@
 using namespace std;
 #define MCW MPI_COMM_WORLD
 
-int value(int x, int y, int width, int height) {
-  complex<float> point(static_cast<float>(x) / width - 1.5,
-                       static_cast<float>(y) / height - 0.5);
+int WIDTH = 512;
+int HEIGHT = 512;
+float re0;
+float re1;
+float c0;
+float c1;
 
-  complex<float> z(0, 0);
+int value(int x, int y) {
+  complex<float> point((static_cast<float>(x) * (re0 - re1) / WIDTH) + re1,
+                       (static_cast<float>(y) * (c0 - c1) / HEIGHT) + c1);
+
+  complex<float> z(point);
   unsigned int numIters = 0;
   for (; abs(z) < 2 && numIters <= 34; ++numIters) {
     z = z * z + point;
@@ -26,14 +34,16 @@ int value(int x, int y, int width, int height) {
 }
 
 int main(int argc, char **argv) {
-  int width = 0;
-  int height = 0;
-  if (argc != 3) {
-    throw std::runtime_error("command args are missing: width and height are "
-                             "required as such: ./a.out <width> <height>");
+  if (argc != 4) {
+    re0 = 0.5;
+    re1 = 0.010;
+    c0 = 0.00019;
+    c1 = c0 + (re1 - re0);
   } else {
-    width = atoi(argv[1]);
-    height = atoi(argv[2]);
+    re0 = atoi(argv[1]);
+    re1 = atoi(argv[2]);
+    c0 = atoi(argv[3]);
+    c1 = c0 + (re1 - re0);
   }
 
   int rank, size;
@@ -42,17 +52,19 @@ int main(int argc, char **argv) {
   MPI_Comm_rank(MCW, &rank);
   MPI_Comm_size(MCW, &size);
 
-  int numRows = height / size;
-  if (rank < static_cast<int>(height) % size) {
+  auto start = std::chrono::high_resolution_clock::now();
+
+  int numRows = HEIGHT / size;
+  if (rank < static_cast<int>(HEIGHT) % size) {
     ++numRows;
   }
 
-  std::vector<int> subRows(numRows * width);
+  std::vector<int> subRows(numRows * WIDTH);
 
   for (int row = 0; row < numRows; ++row) {
-    for (int col = 0; col < width; ++col) {
-      int val = value(col, row * size + rank, width, height);
-      subRows[row * width + col] = val;
+    for (int col = 0; col < WIDTH; ++col) {
+      int val = value(col, row * size + rank);
+      subRows[row * WIDTH + col] = val;
     }
   }
 
@@ -60,7 +72,7 @@ int main(int argc, char **argv) {
     ofstream myBrot("./myBrot.ppm");
 
     // Image header
-    myBrot << "P3\n" << width << " " << height << " 255\n";
+    myBrot << "P3\n" << WIDTH << " " << HEIGHT << " 255\n";
 
     if (myBrot.good()) {
       // Recieve data
@@ -68,29 +80,38 @@ int main(int argc, char **argv) {
       finalRows[0] = subRows;
 
       for (int i = 1; i < size; ++i) {
-        int tempRows = height / size;
-        if (i < static_cast<int>(height) % size) {
+        int tempRows = HEIGHT / size;
+        if (i < static_cast<int>(HEIGHT) % size) {
           ++tempRows;
         }
 
-        std::vector<int> temp(tempRows * width);
-        MPI_Recv(&temp[0], tempRows * width, MPI_INT, i, 0, MCW,
+        std::vector<int> temp(tempRows * WIDTH);
+        MPI_Recv(&temp[0], tempRows * WIDTH, MPI_INT, i, 0, MCW,
                  MPI_STATUS_IGNORE);
         finalRows[i] = temp;
       }
 
-      for (int row = 0; row < height; ++row) {
-        for (int col = 0; col < width; ++col) {
-          auto val = finalRows[row % size][row / size * width + col];
-          switch ((row / 2) % 3) {
+      for (int row = 0; row < HEIGHT; ++row) {
+        for (int col = 0; col < WIDTH; ++col) {
+          auto val = finalRows[row % size][row / size * WIDTH + col];
+          switch (row % 6) {
           case 0:
             myBrot << val << ' ' << 0 << ' ' << 0 << "\n";
             break;
           case 1:
-            myBrot << 0 << ' ' << val << ' ' << 0 << "\n";
+            myBrot << val << ' ' << val << ' ' << 0 << "\n";
             break;
           case 2:
+            myBrot << 0 << ' ' << val << ' ' << 0 << "\n";
+            break;
+          case 3:
+            myBrot << 0 << ' ' << val << ' ' << val << "\n";
+            break;
+          case 4:
             myBrot << 0 << ' ' << 0 << ' ' << val << "\n";
+            break;
+          case 5:
+            myBrot << val << ' ' << 0 << ' ' << val << "\n";
             break;
           };
         }
@@ -102,10 +123,17 @@ int main(int argc, char **argv) {
     }
   } else {
     // Send data to thread 0
-    MPI_Send(&subRows[0], numRows * width, MPI_INT, 0, 0, MCW);
+    MPI_Send(&subRows[0], numRows * WIDTH, MPI_INT, 0, 0, MCW);
   }
 
   MPI_Finalize();
+
+  if (rank == 0) {
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+    printf("%li\n", duration.count());
+  }
 
   return 0;
 }

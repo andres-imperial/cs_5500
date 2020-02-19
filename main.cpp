@@ -9,8 +9,8 @@
 using namespace std;
 #define MCW MPI_COMM_WORLD
 
-int WIDTH = 512;
-int HEIGHT = 512;
+int WIDTH = 800;
+int HEIGHT = 800;
 float re0;
 float re1;
 float c0;
@@ -22,7 +22,7 @@ int value(int x, int y) {
 
   complex<float> z(point);
   unsigned int numIters = 0;
-  for (; abs(z) < 2 && numIters <= 34; ++numIters) {
+  for (; abs(z) < 2 && numIters <= 512; ++numIters) {
     z = z * z + point;
   }
 
@@ -35,14 +35,14 @@ int value(int x, int y) {
 
 int main(int argc, char **argv) {
   if (argc != 4) {
-    re0 = 0.5;
-    re1 = 0.010;
-    c0 = 0.00019;
+    re0 = 0.0014;
+    re1 = -0.748;
+    c0 = 0.1;
     c1 = c0 + (re1 - re0);
   } else {
     re0 = atoi(argv[1]);
-    re1 = atoi(argv[2]);
-    c0 = atoi(argv[3]);
+    c0 = atoi(argv[2]);
+    re1 = atoi(argv[3]);
     c1 = c0 + (re1 - re0);
   }
 
